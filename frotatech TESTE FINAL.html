@@ -3036,3 +3036,80 @@ document.addEventListener('DOMContentLoaded', () => {
 </script>
 </body>
 </html>
+CREATE TABLE usuarios (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  matricula VARCHAR(20) UNIQUE NOT NULL,
+  nome VARCHAR(100) NOT NULL,
+  role VARCHAR(20) CHECK (role IN ('motorista','admin','oficina','gestor')),
+  senha_temporaria BOOLEAN DEFAULT false,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE veiculos (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  placa_cavalo VARCHAR(10) UNIQUE NOT NULL,
+  placa_carreta VARCHAR(10),
+  frota_id VARCHAR(50),
+  status VARCHAR(20) DEFAULT 'ATIVO',
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE checklists (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  protocolo VARCHAR(20) UNIQUE NOT NULL,
+  motorista_id UUID REFERENCES usuarios(id),
+  veiculo_id UUID REFERENCES veiculos(id),
+  hodometro INTEGER NOT NULL,
+  status VARCHAR(20) DEFAULT 'ENVIADO',
+  criado_em TIMESTAMPTZ DEFAULT NOW(),
+  sincronizado BOOLEAN DEFAULT false
+);
+
+CREATE TABLE itens_checklist (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  checklist_id UUID REFERENCES checklists(id) ON DELETE CASCADE,
+  categoria VARCHAR(50) NOT NULL,
+  descricao VARCHAR(200) NOT NULL,
+  estado VARCHAR(20) CHECK (estado IN ('OK','OBSERVACAO','CRITICO')),
+  observacao TEXT,
+  foto_url TEXT,
+  criado_em TIMESTAMPTZ DEFAULT NOW()
+);
+ALTER TABLE checklists ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Motoristas veem apenas seus checklists" ON checklists
+  FOR SELECT USING (auth.uid() = motorista_id);
+export async function resetarSenhaAdmin(matricula: string) {
+  const { data: user } = await supabaseAdmin.auth.admin.getUserByPhoneOrEmail(matricula);
+  if (!user?.user) throw new Error('Motorista não encontrado');
+  
+  const tempPass = `DV-${new Date().getFullYear()}-${Math.random().toString(36).slice(2,8)}`;
+  await supabaseAdmin.auth.admin.updateUserById(user.user.id, { password: tempPass });
+  await supabase.from('usuarios').update({ senha_temporaria: true }).eq('matricula', matricula);
+  return tempPass;
+}
+CREATE SEQUENCE checklist_seq START 1;
+CREATE OR REPLACE FUNCTION gerar_protocolo() RETURNS TEXT AS $$
+DECLARE
+  seq_val INTEGER;
+BEGIN
+  SELECT nextval('checklist_seq') INTO seq_val;
+  RETURN 'CHK-' || TO_CHAR(NOW(), 'YYYY') || '-' || LPAD(seq_val::TEXT, 4, '0');
+END;
+$$ LANGUAGE plpgsql;
+
+-- Trigger automática no INSERT
+CREATE TRIGGER trg_protocolo_checklist
+BEFORE INSERT ON checklists
+FOR EACH ROW EXECUTE FUNCTION set_protocolo_auto();
+-- (Implementar função que chama gerar_protocolo() e atribui a NEW.protocolo)
+{
+  "queueId": "uuid",
+  "payload": { ...dados do checklist... },
+  "retryCount": 0,
+  "createdAt": "2026-05-28T10:00:00Z",
+  "status": "PENDENTE" // PENDENTE | ENVIANDO | ENVIADO | FALHA
+}
+SELECT protocolo, criado_em, sincronizado, motorista_id 
+FROM checklists 
+WHERE criado_em >= NOW() - INTERVAL '24 HOURS'
+ORDER BY criado_em DESC;
